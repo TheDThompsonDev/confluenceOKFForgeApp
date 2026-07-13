@@ -1,0 +1,115 @@
+modules:
+  confluence:globalPage:
+    - key: knowledge-graph-page
+      resource: main
+      resolver:
+        function: resolver
+      title: Knowledge Graph
+      route: knowledge-graph
+
+  scheduledTrigger:
+    - key: knowledge-graph-maintenance
+      function: maintenance
+      interval: day
+
+  rovo:agent:
+    - key: knowledge-graph-agent
+      name: Knowledge Graph Agent
+      description: >
+        Answers questions from your team's knowledge graph — the concepts,
+        entities, and sources your team has curated in Confluence using the
+        Open Knowledge Format (OKF) pattern.
+      prompt: >
+        You are the Knowledge Graph Agent for this Confluence site. Teams here
+        maintain knowledge-graph spaces where ingested articles, papers, and
+        notes are broken down into pages labelled okf-concept, okf-entity, and
+        okf-source, cross-linked to each other.
+
+        When a user asks what the knowledge graph knows about a topic, use the
+        find-knowledge-entries action to search for matching pages, then
+        summarize what you find and always link to the underlying Confluence
+        pages so the user can read the full entries.
+
+        When a user asks about the health, completeness, or maintenance of the
+        knowledge graph (orphaned pages, unresolved links, page counts), use
+        the get-graph-health action and report its findings clearly.
+
+        If a search returns nothing, say so plainly and suggest the topic may
+        not have been ingested yet. Never invent knowledge-graph entries that
+        the actions did not return.
+      conversationStarters:
+        - What does the knowledge graph know about cognitive debt?
+        - Summarize the sources we have ingested about AI research
+        - Are there any orphaned pages in the knowledge graph?
+      actions:
+        - find-knowledge-entries
+        - get-graph-health
+
+  action:
+    - key: find-knowledge-entries
+      name: find-knowledge-entries
+      function: find-entries-fn
+      actionVerb: GET
+      description: >
+        Searches the Confluence knowledge graph for concept, entity, and
+        source pages matching a query. Returns page titles, OKF types,
+        labels, excerpts, and links.
+      inputs:
+        query:
+          title: Query
+          type: string
+          required: true
+          description: >
+            The concept, entity, source, or topic to look up in the
+            knowledge graph.
+    - key: get-graph-health
+      name: get-graph-health
+      function: get-graph-health-fn
+      actionVerb: GET
+      description: >
+        Returns the latest knowledge-graph health report for a space:
+        orphaned pages, unresolved links, and counts of concepts, entities,
+        and sources.
+      inputs:
+        spaceKey:
+          title: Space key
+          type: string
+          required: false
+          description: >
+            The Confluence space key to report on. If omitted, reports on
+            all watched spaces.
+
+  function:
+    - key: resolver
+      handler: index.handler
+    - key: maintenance
+      handler: index.runScheduledMaintenance
+    - key: find-entries-fn
+      handler: index.findKnowledgeEntries
+    - key: get-graph-health-fn
+      handler: index.getGraphHealth
+
+resources:
+  - key: main
+    path: static/graph/build
+
+permissions:
+  scopes:
+    - read:confluence-content.all
+    - read:confluence-content.summary
+    - read:confluence-space.summary
+    - search:confluence
+    - read:confluence-props
+    - write:confluence-props
+    - write:confluence-content
+    - read:space:confluence
+    - read:page:confluence
+    - write:page:confluence
+    - storage:app
+
+app:
+  runtime:
+    name: nodejs24.x
+    memoryMB: 256
+    architecture: arm64
+  id: ari:cloud:ecosystem::app/67521675-0b94-4dd6-93c6-09d05d27144c
