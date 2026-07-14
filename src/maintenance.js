@@ -53,6 +53,7 @@ export async function runHealthCheck(client, spaceKey) {
     stats: graph.stats,
     orphans: graph.nodes.filter((n) => n.orphan).map((n) => n.title),
     unresolved: graph.unresolved,
+    inbox: graph.nodes.filter((n) => n.type === 'inbox').map((n) => n.title),
   };
   await kvs.set(healthKey(spaceKey), summary);
 
@@ -68,13 +69,17 @@ export async function runHealthCheck(client, spaceKey) {
   return summary;
 }
 
-function renderHealthReport({ spaceKey, checkedAt, stats, orphans, unresolved }) {
+function renderHealthReport({ spaceKey, checkedAt, stats, orphans, unresolved, inbox = [] }) {
   const pageLink = (title) =>
     `<ac:link><ri:page ri:content-title="${escapeXhtml(title)}" /></ac:link>`;
 
   const orphanSection = orphans.length
     ? `<ul>${orphans.map((t) => `<li>${pageLink(t)}</li>`).join('')}</ul>`
     : '<p>None — every page is connected. 🎉</p>';
+
+  const inboxSection = inbox.length
+    ? `<ul>${inbox.map((t) => `<li>${pageLink(t)}</li>`).join('')}</ul>`
+    : '<p>None — the inbox is clear. 🎉</p>';
 
   const unresolvedSection = unresolved.length
     ? `<ul>${unresolved
@@ -98,6 +103,9 @@ function renderHealthReport({ spaceKey, checkedAt, stats, orphans, unresolved })
     `<h2>Unresolved links (${unresolved.length})</h2>`,
     '<p>Links that point to pages that do not exist in this space yet.</p>',
     unresolvedSection,
+    `<h2>Awaiting ingestion (${inbox.length})</h2>`,
+    '<p>Raw sources captured from Slack that the ingest agent has not distilled yet.</p>',
+    inboxSection,
     `<p><em>Space: ${escapeXhtml(spaceKey)}</em></p>`,
   ].join('');
 }

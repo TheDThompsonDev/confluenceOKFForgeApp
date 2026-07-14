@@ -1,5 +1,4 @@
-import { route } from '@forge/api';
-import { getSpaceId, findPageByTitle, createPage } from './lib/confluence';
+import { getSpaceId, findPageByTitle, createPage, addLabel } from './lib/confluence';
 
 // Demo knowledge graph based on ingesting two sources: the MIT "cognitive
 // debt" study and a blog post on frontier-model adoption. Includes one
@@ -145,15 +144,4 @@ export async function seedDemoSpace(client, spaceKey) {
   }
 
   return { spaceKey, created, skipped };
-}
-
-async function addLabel(client, pageId, label) {
-  const res = await client.requestConfluence(route`/wiki/rest/api/content/${pageId}/label`, {
-    method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify([{ prefix: 'global', name: label }]),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to label page ${pageId}: ${res.status} ${await res.text()}`);
-  }
 }

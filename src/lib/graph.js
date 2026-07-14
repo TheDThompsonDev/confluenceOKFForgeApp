@@ -36,15 +36,17 @@ export async function buildGraph(client, spaceKey) {
     }
   }
 
+  // Inbox stubs are unprocessed by definition — being unlinked is their
+  // normal state, not a defect, so they're never flagged as orphans.
   const nodes = pages.map((page) => ({
     id: page.id,
     title: page.title,
     type: page.type,
     url: page.url,
-    orphan: degree.get(page.id) === 0,
+    orphan: degree.get(page.id) === 0 && page.type !== 'inbox',
   }));
 
-  const countByType = { concept: 0, entity: 0, source: 0, page: 0 };
+  const countByType = { concept: 0, entity: 0, source: 0, page: 0, inbox: 0 };
   for (const node of nodes) countByType[node.type] += 1;
 
   return {

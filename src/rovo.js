@@ -1,11 +1,6 @@
 import api, { route } from '@forge/api';
 import { getWatchedSpaces, getStoredHealth } from './maintenance';
-
-const OKF_LABEL_TYPES = {
-  'okf-concept': 'concept',
-  'okf-entity': 'entity',
-  'okf-source': 'source',
-};
+import { OKF_LABEL_TYPES } from './lib/confluence';
 
 // Rovo action: search the knowledge graph for pages matching a query.
 export async function findKnowledgeEntries(payload) {

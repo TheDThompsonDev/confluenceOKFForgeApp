@@ -1,9 +1,10 @@
 import { route } from '@forge/api';
 
-const OKF_LABEL_TYPES = {
+export const OKF_LABEL_TYPES = {
   'okf-concept': 'concept',
   'okf-entity': 'entity',
   'okf-source': 'source',
+  'okf-inbox': 'inbox',
 };
 
 const PAGE_FETCH_LIMIT = 100;
@@ -137,6 +138,17 @@ export async function createPage(client, spaceId, title, storageBody) {
     throw new Error(`Failed to create page "${title}": ${res.status} ${await res.text()}`);
   }
   return res.json();
+}
+
+export async function addLabel(client, pageId, label) {
+  const res = await client.requestConfluence(route`/wiki/rest/api/content/${pageId}/label`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify([{ prefix: 'global', name: label }]),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to label page ${pageId}: ${res.status} ${await res.text()}`);
+  }
 }
 
 export async function updatePage(client, pageId, title, storageBody) {

@@ -34,6 +34,14 @@ modules:
         knowledge graph (orphaned pages, unresolved links, page counts), use
         the get-graph-health action and report its findings clearly.
 
+        When a user shares a link and asks to file, save, or add it to the
+        knowledge graph — or when you are triggered on a message containing a
+        link in a channel — use the file-to-inbox action. Pass the URL, the
+        sharer's comment about why it matters, who shared it, and the channel
+        name if known. Confirm the result briefly, quoting the created page
+        title. If the action reports a duplicate, say the link is already in
+        the inbox.
+
         If a search returns nothing, say so plainly and suggest the topic may
         not have been ingested yet. Never invent knowledge-graph entries that
         the actions did not return.
@@ -44,6 +52,7 @@ modules:
       actions:
         - find-knowledge-entries
         - get-graph-health
+        - file-to-inbox
 
   action:
     - key: find-knowledge-entries
@@ -62,6 +71,44 @@ modules:
           description: >
             The concept, entity, source, or topic to look up in the
             knowledge graph.
+    - key: file-to-inbox
+      name: file-to-inbox
+      function: file-inbox-fn
+      actionVerb: CREATE
+      description: >
+        Files a shared link into the knowledge graph inbox as a raw source
+        awaiting distillation. Creates an okf-inbox stub page recording the
+        URL, the sharer's comment, who shared it, and where. Skips URLs that
+        are already in the inbox.
+      inputs:
+        url:
+          title: URL
+          type: string
+          required: true
+          description: The link to file into the knowledge graph inbox.
+        comment:
+          title: Comment
+          type: string
+          required: false
+          description: >
+            The sharer's message about why this link matters — preserved on
+            the stub page as ingestion context.
+        sharedBy:
+          title: Shared by
+          type: string
+          required: false
+          description: Name of the person who shared the link.
+        channel:
+          title: Channel
+          type: string
+          required: false
+          description: The channel or place where the link was shared.
+        spaceKey:
+          title: Space key
+          type: string
+          required: false
+          description: >
+            Target Confluence space key. Defaults to the first watched space.
     - key: get-graph-health
       name: get-graph-health
       function: get-graph-health-fn
@@ -82,6 +129,8 @@ modules:
   function:
     - key: resolver
       handler: index.handler
+    - key: file-inbox-fn
+      handler: index.fileToInbox
     - key: maintenance
       handler: index.runScheduledMaintenance
     - key: find-entries-fn

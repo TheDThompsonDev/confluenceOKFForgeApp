@@ -6,6 +6,7 @@ const TYPE_COLORS = {
   concept: '#8270DB',
   entity: '#4BCE97',
   source: '#F5CD47',
+  inbox: '#579DFF',
   page: '#8C9BAB',
 };
 
@@ -13,6 +14,7 @@ const TYPE_LABELS = {
   concept: 'Concept',
   entity: 'Entity',
   source: 'Source',
+  inbox: 'Inbox (to read)',
   page: 'Page',
 };
 
@@ -131,6 +133,7 @@ function StatsBar({ stats }) {
     ['Concepts', stats.concept],
     ['Entities', stats.entity],
     ['Sources', stats.source],
+    ['Inbox', stats.inbox ?? 0],
     ['Orphans', stats.orphans],
     ['Unresolved', stats.unresolvedLinks],
   ];
