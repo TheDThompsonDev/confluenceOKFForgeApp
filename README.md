@@ -48,19 +48,74 @@ forge install   # choose Confluence and your site
 
 Then in Confluence: **Apps → Knowledge Graph**, pick a space, and watch it render. Click **Watch this space** to enable the daily health checks, or **Run health check now** to generate a report immediately. Find the Rovo agent in Rovo Chat as **Knowledge Graph Agent**.
 
-## Capturing links from Slack (optional, no code)
+## Capturing links from Slack
 
-Turn your team's reading channel into a knowledge-graph inbox using the [official Atlassian Rovo app for Slack](https://slack.com/marketplace/A08B0EYMUPR-atlassian-rovo) — no webhooks, no Workflow Builder, no third-party apps.
+Two ways to turn your team's reading channel into a knowledge-graph inbox. Both end at the same place: a `📥` stub page labeled `okf-inbox` — a blue node in the graph, listed in the health report under "Awaiting ingestion." Duplicate URLs are skipped automatically, and neither path does AI extraction — distillation belongs to your ingest agent (see the wiki-constitution instructions embedded in every stub page).
 
-1. A Slack admin installs the Atlassian Rovo app and connects it to your site (one-time).
-2. Add the **Knowledge Graph Agent** to your reading channel and configure its trigger — an emoji like 📚, an @mention, or every message, per the Rovo Slack app's channel-agent settings.
-3. Share a link with a comment about why it matters. When the agent is triggered, it calls the `file-to-inbox` action: a `📥` stub page appears in Confluence, labeled `okf-inbox` — a blue node in the graph, listed in the health report under "Awaiting ingestion" — and the agent confirms in the thread.
+### Option A — the built-in Slack bridge (custom Slack app → webtrigger)
 
-The same action works anywhere the agent runs: in Rovo Chat in Confluence, just say *"file this to the knowledge graph: <url> — great breakdown of event sourcing."*
+The app ships a webtrigger that speaks Slack's Events API directly: every channel message containing a link is filed to the inbox, with the rest of the message preserved as the "why this matters" comment. No Rovo required. The bridge enriches each stub with *metadata only* — the sharer's display name and channel name (Slack API) and the link's title (YouTube oEmbed, or the page's `<title>`) — while content distillation stays with the ingest agent.
 
-Duplicate URLs are skipped automatically. The action does **no** AI extraction and fetches **nothing** external — it files the URL + context, and the distillation belongs to your ingest agent (see the wiki-constitution instructions embedded in every stub page). The app remains fully egress-free and Runs on Atlassian eligible.
+1. Deploy and get your webtrigger URL:
 
-> **Design note:** an earlier iteration used a Forge webtrigger fed by Slack Workflow Builder. Two reasons it was replaced: Workflow Builder has no native outgoing-webhook step (only third-party workarounds), and webtrigger modules end Runs on Atlassian eligibility (verify with `forge eligibility`). Routing capture through the Rovo agent solved both — the official Rovo Slack app is the bridge, and the app keeps zero egress.
+   ```sh
+   forge deploy
+   forge install --upgrade    # adding a module bumps the major version — installs stay pinned until you upgrade
+   forge webtrigger           # choose slack-events, copy the URL
+   ```
+
+2. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps) → **Create New App → From a manifest**, pasting (fill in your webtrigger URL):
+
+   ```yaml
+   display_information:
+     name: Knowledge Graph Bridge
+     description: Files shared links into the Confluence knowledge-graph inbox
+   features:
+     bot_user:
+       display_name: kg-bridge
+       always_online: true
+   oauth_config:
+     scopes:
+       bot:
+         - channels:history   # required to pair with the message.channels event
+         - users:read         # resolve "shared by" display names
+         - channels:read      # resolve channel names
+   settings:
+     event_subscriptions:
+       request_url: <your webtrigger URL>
+       bot_events:
+         - message.channels
+   ```
+
+3. **Install to Workspace**, then collect two credentials from the app pages — the **Signing Secret** (Basic Information) and the **Bot User OAuth Token** (`xoxb-…`, OAuth & Permissions) — and store both in Forge, then redeploy so the running function picks them up:
+
+   ```sh
+   forge variables set --encrypt SLACK_SIGNING_SECRET <value>
+   forge variables set --encrypt SLACK_BOT_TOKEN <value>
+   forge deploy
+   ```
+
+4. `/invite @kg-bridge` in your reading channel. Post a link with a sentence about why it matters — the stub page appears in Confluence within seconds, titled after the shared page or video.
+
+Optionally, set a `YOUTUBE_API_KEY` (official YouTube Data API v3, free) the same way — video stubs then capture the channel, duration, tags, and full description instead of just the title, giving automated distillation something real to work with. Transcripts are deliberately not fetched (the official API is owner-only; scraping is fragile and ToS-gray) — full video distillation belongs to the ingest agent.
+
+Slack retries deliveries that don't get a fast 200; the KVS dedup makes those retries harmless. Requests are verified against the signing secret (HMAC, 5-minute replay window). If `SLACK_BOT_TOKEN` is unset or a lookup fails, stubs degrade gracefully to raw Slack IDs and domain-based titles — capture never depends on enrichment.
+
+### Option B — the official Rovo app for Slack (no code)
+
+If your org has the [Atlassian Rovo app for Slack](https://slack.com/marketplace/A08B0EYMUPR-atlassian-rovo) connected (org admin, one-time), add the **Knowledge Graph Agent** to your channel and configure its trigger — an emoji like 📚, an @mention, or every message. When triggered, the agent calls the same `file-to-inbox` action and confirms in the thread. This route also resolves sharer names and lets the agent respond conversationally, which the raw bridge doesn't.
+
+The action works anywhere the agent runs: in Rovo Chat in Confluence, just say *"file this to the knowledge graph: <url> — great breakdown of event sourcing."*
+
+> **Design note:** an earlier iteration used a Forge webtrigger fed by Slack **Workflow Builder** — abandoned because Workflow Builder has no native outgoing-webhook step. The current bridge instead pairs the webtrigger with a proper Slack app using the Events API, which posts natively to any URL. Heads-up: the webtrigger module and the `external.fetch` egress permission each end **Runs on Atlassian** eligibility (verify with `forge eligibility`); if RoA matters to you, delete the `webtrigger` module, `src/slack-bridge.js`, and the `permissions.external` block, and use Option B.
+
+## Automated ingestion (optional, bring your own model)
+
+With a `GEMINI_API_KEY` set (`forge variables set --encrypt GEMINI_API_KEY <key>`, free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)), the app distills inbox stubs automatically: an hourly scheduled trigger (or the `ingest-now` webtrigger, for demos) sweeps `okf-inbox` pages and, for each one, produces an `okf-source` summary page plus created-or-reused `okf-concept` / `okf-entity` pages, cross-linked per the wiki constitution — then retires the stub.
+
+The division of labor embodies the app's core principle — **non-deterministic work executed by AI, verified and written by deterministic code**: Gemini only produces structured JSON (summary, key points, concepts, entities); Forge code does all page creation, deduplication against existing graph pages, linking, and labeling. Gemini is the default because it's the only major model API that ingests a **YouTube URL natively** (it watches the video — no transcript scraping); articles use the text captured at share time, and anything else falls back to Gemini's `url_context` tool. Stubs that fail three times are labeled `okf-ingest-failed` and skipped. No key set → the sweep is a no-op and stubs wait for a human-driven ingest agent (Rovo, or any MCP-connected assistant).
+
+One invocation ingests one stub (video distillation needs most of Forge's 55-second function budget); a backlog drains across hourly runs, or hit the `ingest-now` webtrigger repeatedly (`forge webtrigger` for the URL).
 
 ## Project structure
 
@@ -71,6 +126,9 @@ src/
   resolvers.js            # Custom UI resolver (spaces, graph data, watch/health)
   maintenance.js          # scheduled trigger + health report writer
   rovo.js                 # Rovo agent action handlers
+  inbox.js                # file-to-inbox action: link → okf-inbox stub page
+  slack-bridge.js         # webtrigger: Slack Events API → fileToInbox
+  ingest.js               # scheduled/on-demand: okf-inbox stubs → Gemini → source/concept/entity pages
   lib/
     confluence.js         # Confluence REST helpers (v1 CQL search + v2 pages/spaces)
     graph.js              # graph builder: pages → nodes, page links → edges

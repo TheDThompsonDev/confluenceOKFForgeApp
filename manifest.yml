@@ -11,14 +11,17 @@ modules:
     - key: knowledge-graph-maintenance
       function: maintenance
       interval: day
+    - key: knowledge-graph-ingest
+      function: ingest-fn
+      interval: hour
 
   rovo:agent:
     - key: knowledge-graph-agent
       name: Knowledge Graph Agent
       description: >
         Answers questions from your team's knowledge graph — the concepts,
-        entities, and sources your team has curated in Confluence using the
-        Open Knowledge Format (OKF) pattern.
+        entities, and sources your team has curated in Confluence using the Open
+        Knowledge Format (OKF) pattern.
       prompt: >
         You are the Knowledge Graph Agent for this Confluence site. Teams here
         maintain knowledge-graph spaces where ingested articles, papers, and
@@ -31,16 +34,16 @@ modules:
         pages so the user can read the full entries.
 
         When a user asks about the health, completeness, or maintenance of the
-        knowledge graph (orphaned pages, unresolved links, page counts), use
-        the get-graph-health action and report its findings clearly.
+        knowledge graph (orphaned pages, unresolved links, page counts), use the
+        get-graph-health action and report its findings clearly.
 
         When a user shares a link and asks to file, save, or add it to the
         knowledge graph — or when you are triggered on a message containing a
         link in a channel — use the file-to-inbox action. Pass the URL, the
         sharer's comment about why it matters, who shared it, and the channel
         name if known. Confirm the result briefly, quoting the created page
-        title. If the action reports a duplicate, say the link is already in
-        the inbox.
+        title. If the action reports a duplicate, say the link is already in the
+        inbox.
 
         If a search returns nothing, say so plainly and suggest the topic may
         not have been ingested yet. Never invent knowledge-graph entries that
@@ -60,26 +63,26 @@ modules:
       function: find-entries-fn
       actionVerb: GET
       description: >
-        Searches the Confluence knowledge graph for concept, entity, and
-        source pages matching a query. Returns page titles, OKF types,
-        labels, excerpts, and links.
+        Searches the Confluence knowledge graph for concept, entity, and source
+        pages matching a query. Returns page titles, OKF types, labels,
+        excerpts, and links.
       inputs:
         query:
           title: Query
           type: string
           required: true
           description: >
-            The concept, entity, source, or topic to look up in the
-            knowledge graph.
+            The concept, entity, source, or topic to look up in the knowledge
+            graph.
     - key: file-to-inbox
       name: file-to-inbox
       function: file-inbox-fn
       actionVerb: CREATE
       description: >
         Files a shared link into the knowledge graph inbox as a raw source
-        awaiting distillation. Creates an okf-inbox stub page recording the
-        URL, the sharer's comment, who shared it, and where. Skips URLs that
-        are already in the inbox.
+        awaiting distillation. Creates an okf-inbox stub page recording the URL,
+        the sharer's comment, who shared it, and where. Skips URLs that are
+        already in the inbox.
       inputs:
         url:
           title: URL
@@ -91,8 +94,8 @@ modules:
           type: string
           required: false
           description: >
-            The sharer's message about why this link matters — preserved on
-            the stub page as ingestion context.
+            The sharer's message about why this link matters — preserved on the
+            stub page as ingestion context.
         sharedBy:
           title: Shared by
           type: string
@@ -114,17 +117,22 @@ modules:
       function: get-graph-health-fn
       actionVerb: GET
       description: >
-        Returns the latest knowledge-graph health report for a space:
-        orphaned pages, unresolved links, and counts of concepts, entities,
-        and sources.
+        Returns the latest knowledge-graph health report for a space: orphaned
+        pages, unresolved links, and counts of concepts, entities, and sources.
       inputs:
         spaceKey:
           title: Space key
           type: string
           required: false
           description: >
-            The Confluence space key to report on. If omitted, reports on
-            all watched spaces.
+            The Confluence space key to report on. If omitted, reports on all
+            watched spaces.
+
+  webtrigger:
+    - key: slack-events
+      function: slack-events-fn
+    - key: ingest-now
+      function: ingest-now-fn
 
   function:
     - key: resolver
@@ -137,6 +145,12 @@ modules:
       handler: index.findKnowledgeEntries
     - key: get-graph-health-fn
       handler: index.getGraphHealth
+    - key: slack-events-fn
+      handler: index.slackEvents
+    - key: ingest-fn
+      handler: index.runScheduledIngest
+    - key: ingest-now-fn
+      handler: index.ingestNow
 
 resources:
   - key: main
@@ -154,7 +168,12 @@ permissions:
     - read:space:confluence
     - read:page:confluence
     - write:page:confluence
+    - read:label:confluence
     - storage:app
+  external:
+    fetch:
+      backend:
+        - address: "*"
 
 app:
   runtime:

@@ -50,8 +50,9 @@ export async function fileToInbox(payload) {
     return { status: 'error', message: `Space ${spaceKey} not found.` };
   }
 
-  const title = inboxTitle(url, comment);
-  const page = await createPage(client, spaceId, title, inboxBody({ url, comment, sharedBy, channel }));
+  const title = inboxTitle(url, comment, payload?.title);
+  const body = inboxBody({ url, comment, sharedBy, channel, rawContent: payload?.rawContent });
+  const page = await createPage(client, spaceId, title, body);
   await addLabel(client, page.id, 'okf-inbox');
   await kvs.set(dedupKey, { url, pageId: page.id, receivedAt: new Date().toISOString() });
 
@@ -61,11 +62,16 @@ export async function fileToInbox(payload) {
     message: `Filed to the knowledge graph inbox 📥 — it will be distilled on the next ingest run.`,
     pageTitle: title,
     pageId: page.id,
+    pageBody: body,
     spaceKey,
   };
 }
 
-function inboxTitle(url, comment) {
+function inboxTitle(url, comment, fetchedTitle) {
+  const cleanedTitle = (fetchedTitle ?? '').replace(/\s+/g, ' ').trim();
+  if (cleanedTitle) {
+    return `📥 ${cleanedTitle.slice(0, 120)}${cleanedTitle.length > 120 ? '…' : ''}`;
+  }
   let domain;
   try {
     domain = new URL(url).hostname.replace(/^www\./, '');
@@ -79,7 +85,7 @@ function inboxTitle(url, comment) {
   return `📥 ${domain}${suffix}`;
 }
 
-function inboxBody({ url, comment, sharedBy, channel }) {
+function inboxBody({ url, comment, sharedBy, channel, rawContent }) {
   const rows = [
     ['Source URL', `<a href="${escapeXhtml(url)}">${escapeXhtml(url)}</a>`],
     ['Shared by', escapeXhtml(sharedBy)],
@@ -94,7 +100,12 @@ function inboxBody({ url, comment, sharedBy, channel }) {
     '</tbody></table>',
     comment ? '<h2>Why this matters to us</h2>' : '',
     comment ? `<blockquote><p>${escapeXhtml(comment)}</p></blockquote>` : '',
+    rawContent ? '<h2>Captured content (raw)</h2>' : '',
+    rawContent
+      ? '<ac:structured-macro ac:name="expand"><ac:parameter ac:name="title">Deterministically extracted at capture time — no AI, may include page boilerplate</ac:parameter>' +
+        `<ac:rich-text-body><p>${escapeXhtml(rawContent).replace(/\n/g, '</p><p>')}</p></ac:rich-text-body></ac:structured-macro>`
+      : '',
     '<h2>For the ingest agent</h2>',
-    '<p>Read the source URL above, then follow the wiki constitution: create or update okf-concept and okf-entity pages, write an okf-source summary page linking to them, preserve the sharer’s comment as “why this matters to us,” and replace this page’s label <code>okf-inbox</code> with <code>okf-source</code> — or link this stub from the new source page and archive it.</p>',
+    '<p>Use the captured content above if present (otherwise read the source URL), then follow the wiki constitution: create or update okf-concept and okf-entity pages, write an okf-source summary page linking to them, preserve the sharer’s comment as “why this matters to us,” and replace this page’s label <code>okf-inbox</code> with <code>okf-source</code> — or link this stub from the new source page and archive it.</p>',
   ].filter(Boolean).join('');
 }

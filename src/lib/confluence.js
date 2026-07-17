@@ -41,42 +41,69 @@ export async function getSpaceId(client, spaceKey) {
   return data.results?.[0]?.id ?? null;
 }
 
-// One CQL search returns bodies and labels together, so building the graph
-// costs O(pages/limit) requests rather than one request per page.
+// Page discovery uses the v2 space-pages listing, which reads the database
+// and sees seconds-old pages — deliberately NOT the CQL search endpoint,
+// whose index lags minutes behind page creation and made just-ingested
+// pages invisible to the graph and the ingest sweep. v2 doesn't inline
+// labels, so those are fetched per page in parallel batches.
 export async function getSpacePages(client, spaceKey) {
+  const spaceId = await getSpaceId(client, spaceKey);
+  if (!spaceId) throw new Error(`Space ${spaceKey} not found`);
+
   const pages = [];
-  let start = 0;
+  let cursor = null;
   while (pages.length < MAX_PAGES) {
-    const cql = `space = "${spaceKey}" AND type = page ORDER BY created ASC`;
     const res = await client.requestConfluence(
-      route`/wiki/rest/api/content/search?cql=${cql}&expand=metadata.labels,body.storage&limit=${PAGE_FETCH_LIMIT}&start=${start}`,
+      cursor
+        ? route`/wiki/api/v2/spaces/${spaceId}/pages?status=current&body-format=storage&limit=${PAGE_FETCH_LIMIT}&cursor=${cursor}`
+        : route`/wiki/api/v2/spaces/${spaceId}/pages?status=current&body-format=storage&limit=${PAGE_FETCH_LIMIT}`,
       { headers: { Accept: 'application/json' } }
     );
     if (!res.ok) {
       throw new Error(`Failed to fetch pages for ${spaceKey}: ${res.status} ${await res.text()}`);
     }
     const data = await res.json();
-    const results = data.results || [];
-    for (const page of results) {
+    for (const page of data.results || []) {
       pages.push({
-        id: page.id,
+        id: String(page.id),
         title: page.title,
-        type: classifyPage(page),
-        labels: (page.metadata?.labels?.results || []).map((l) => l.name),
         body: page.body?.storage?.value || '',
         url: page._links?.webui ? `/wiki${page._links.webui}` : null,
       });
     }
-    if (results.length < PAGE_FETCH_LIMIT) break;
-    start += PAGE_FETCH_LIMIT;
+    const next = data._links?.next;
+    if (!next) break;
+    cursor = new URL(`https://x${next}`).searchParams.get('cursor');
+    if (!cursor) break;
+  }
+
+  const BATCH = 10;
+  for (let i = 0; i < pages.length; i += BATCH) {
+    await Promise.all(
+      pages.slice(i, i + BATCH).map(async (page) => {
+        page.labels = await getPageLabels(client, page.id);
+        page.type = classifyLabels(page.labels);
+      })
+    );
   }
   return pages;
 }
 
-function classifyPage(page) {
-  const labels = page.metadata?.labels?.results || [];
+async function getPageLabels(client, pageId) {
+  const res = await client.requestConfluence(
+    route`/wiki/api/v2/pages/${pageId}/labels?limit=100`,
+    { headers: { Accept: 'application/json' } }
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to fetch labels for page ${pageId}: ${res.status}`);
+  }
+  const data = await res.json();
+  return (data.results || []).map((l) => l.name);
+}
+
+function classifyLabels(labels) {
   for (const label of labels) {
-    if (OKF_LABEL_TYPES[label.name]) return OKF_LABEL_TYPES[label.name];
+    if (OKF_LABEL_TYPES[label]) return OKF_LABEL_TYPES[label];
   }
   return 'page';
 }
@@ -110,10 +137,13 @@ export function escapeXhtml(text) {
     .replace(/"/g, '&quot;');
 }
 
+// Database-backed exact-title lookup via v2 — see getSpacePages for why
+// this avoids the lagging search index.
 export async function findPageByTitle(client, spaceKey, title) {
-  const cql = `space = "${spaceKey}" AND type = page AND title = "${title.replace(/"/g, '\\"')}"`;
+  const spaceId = await getSpaceId(client, spaceKey);
+  if (!spaceId) return null;
   const res = await client.requestConfluence(
-    route`/wiki/rest/api/content/search?cql=${cql}&limit=1`,
+    route`/wiki/api/v2/pages?space-id=${spaceId}&title=${title}&status=current&limit=1`,
     { headers: { Accept: 'application/json' } }
   );
   if (!res.ok) {
@@ -148,6 +178,16 @@ export async function addLabel(client, pageId, label) {
   });
   if (!res.ok) {
     throw new Error(`Failed to label page ${pageId}: ${res.status} ${await res.text()}`);
+  }
+}
+
+export async function removeLabel(client, pageId, label) {
+  const res = await client.requestConfluence(
+    route`/wiki/rest/api/content/${pageId}/label/${label}`,
+    { method: 'DELETE' }
+  );
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Failed to remove label ${label} from ${pageId}: ${res.status} ${await res.text()}`);
   }
 }
 
