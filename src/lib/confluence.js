@@ -41,11 +41,6 @@ export async function getSpaceId(client, spaceKey) {
   return data.results?.[0]?.id ?? null;
 }
 
-// Page discovery uses the v2 space-pages listing, which reads the database
-// and sees seconds-old pages — deliberately NOT the CQL search endpoint,
-// whose index lags minutes behind page creation and made just-ingested
-// pages invisible to the graph and the ingest sweep. v2 doesn't inline
-// labels, so those are fetched per page in parallel batches.
 export async function getSpacePages(client, spaceKey) {
   const spaceId = await getSpaceId(client, spaceKey);
   if (!spaceId) throw new Error(`Space ${spaceKey} not found`);
@@ -108,8 +103,6 @@ function classifyLabels(labels) {
   return 'page';
 }
 
-// Storage-format bodies reference other pages as
-// <ac:link><ri:page ri:content-title="Some Page"/></ac:link>
 export function parseLinkedTitles(storageBody) {
   const titles = [];
   const pattern = /<ri:page\b[^>]*ri:content-title="([^"]*)"/g;
@@ -137,8 +130,6 @@ export function escapeXhtml(text) {
     .replace(/"/g, '&quot;');
 }
 
-// Database-backed exact-title lookup via v2 — see getSpacePages for why
-// this avoids the lagging search index.
 export async function findPageByTitle(client, spaceKey, title) {
   const spaceId = await getSpaceId(client, spaceKey);
   if (!spaceId) return null;

@@ -4,11 +4,6 @@ import { kvs } from '@forge/kvs';
 import { getSpaceId, createPage, addLabel, escapeXhtml } from './lib/confluence';
 import { getWatchedSpaces } from './maintenance';
 
-// Rovo action: file a shared link as an okf-inbox stub page. Reached from
-// Rovo Chat anywhere it runs — including the official Rovo app for Slack,
-// where the agent can be channel-triggered by an emoji or @mention.
-// Deliberately does NO AI work and NO external fetching: the ingest agent
-// (via Remote MCP) distills the source later. Zero egress.
 const URL_PATTERN = /https?:\/\/[^\s<>|"']+/;
 
 export async function fileToInbox(payload) {

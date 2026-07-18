@@ -3,9 +3,6 @@ import { invoke, router } from '@forge/bridge';
 import * as d3 from 'd3';
 import './App.css';
 
-// The palette deliberately uses calm, mineral-like colors. A zettelkasten can
-// become visually dense very quickly, so the node colors should help identify
-// note roles without competing with note titles and relationships.
 const TYPE_COLORS = {
   concept: '#A78BFA',
   entity: '#52D6A2',
@@ -24,10 +21,6 @@ const TYPE_LABELS = {
 
 const FILTER_TYPES = Object.keys(TYPE_LABELS);
 
-// Forge Custom UI frames grow to match their contents, which makes viewport
-// height units circular here. Reserve enough of the physical display for the
-// Confluence header, app navigation, toolbar, and metrics so the complete app
-// fits without requiring a one-line page scroll on common desktop displays.
 const DISPLAY_HEIGHT = window.screen.availHeight || window.screen.height;
 const CANVAS_HEIGHT = Math.max(520, Math.min(760, DISPLAY_HEIGHT - 490));
 
@@ -287,9 +280,6 @@ function GraphCanvas({ graph, loading, query, visibleTypes, orphansOnly }) {
   const [dims, setDims] = useState({ width: 0, height: 0 });
   const [selectedNode, setSelectedNode] = useState(null);
 
-  // Filtering removes hidden notes before simulation. This is more useful than
-  // merely making them transparent because the remaining zettelkasten cluster
-  // can reclaim the empty space and become easier to inspect.
   const filteredGraph = useMemo(() => {
     if (!graph) return null;
     const permitted = new Set(visibleTypes);
@@ -303,8 +293,6 @@ function GraphCanvas({ graph, loading, query, visibleTypes, orphansOnly }) {
     return { nodes, links };
   }, [graph, visibleTypes, orphansOnly]);
 
-  // Track the real canvas dimensions. Confluence can resize the app iframe when
-  // its sidebar opens, so relying on the initial window width clips the graph.
   useEffect(() => {
     const element = containerRef.current;
     if (!element) return undefined;
@@ -337,9 +325,6 @@ function GraphCanvas({ graph, loading, query, visibleTypes, orphansOnly }) {
     });
     nodes.forEach((node) => { node.degree = degree.get(node.id) || 0; });
 
-    // Each adjacency set powers the neighborhood focus interaction. Selecting a
-    // note emphasizes its direct backlinks and outlinks—the most natural unit
-    // of exploration in a zettelkasten.
     const neighbors = new Map(nodes.map((node) => [node.id, new Set([node.id])]));
     links.forEach((link) => {
       const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
@@ -583,7 +568,7 @@ function GraphCanvas({ graph, loading, query, visibleTypes, orphansOnly }) {
       sceneRef.current = null;
       simulation.stop();
     };
-  }, [filteredGraph, dims]); // Search focus updates separately to avoid restarting the force simulation.
+  }, [filteredGraph, dims]);
 
   useEffect(() => {
     sceneRef.current?.applyFocus(selectedNode?.id || null, query);

@@ -11,23 +11,7 @@ import {
 } from './lib/confluence';
 import { getWatchedSpaces } from './maintenance';
 
-// Automated ingestion: sweeps okf-inbox stubs and distills each into the
-// graph — an okf-source summary page plus created-or-reused okf-concept /
-// okf-entity pages, cross-linked per the wiki constitution.
-//
-// The non-deterministic step (distillation) goes to Gemini — the only major
-// API that ingests a YouTube URL natively, watching the video itself. All
-// page creation and linking stays deterministic code. No GEMINI_API_KEY set
-// means the sweep is a no-op and stubs simply wait.
-//
-// Runs hourly via scheduledTrigger, or on demand via the ingest-now
-// webtrigger. Each run processes a few stubs (Forge invocation time limits;
-// video distillation is slow), so a backlog drains across runs. Stubs that
-// fail MAX_ATTEMPTS times are labeled okf-ingest-failed and skipped.
 const GEMINI_MODEL = 'gemini-2.5-flash';
-// One stub per invocation: video distillation regularly needs most of the
-// 55-second function limit. The hourly schedule (or repeated ingest-now
-// calls) drains a backlog.
 const MAX_PER_RUN = 1;
 const MAX_ATTEMPTS = 3;
 
@@ -37,9 +21,6 @@ export async function runScheduledIngest() {
   return ingestSweep();
 }
 
-// Called by the Slack bridge right after filing a stub, with the page data
-// in hand — CQL-based discovery can't see a seconds-old page (search index
-// lag), but ingestion by known id/body needs no index.
 export async function ingestNewStub(spaceKey, stub) {
   if (!process.env.GEMINI_API_KEY) {
     return { status: 'skipped', reason: 'GEMINI_API_KEY not set' };
@@ -50,8 +31,6 @@ export async function ingestNewStub(spaceKey, stub) {
 }
 
 export async function ingestNow(request) {
-  // ?pageId=&spaceKey= ingests one specific stub by id — immune to the
-  // search-index lag that hides seconds-old pages from the CQL sweep.
   const pageId = request?.queryParameters?.pageId?.[0];
   const spaceKey = request?.queryParameters?.spaceKey?.[0];
   let summary;
@@ -163,8 +142,6 @@ async function ingestStub(client, spaceKey, pages, stub) {
   return { spaceKey, stub: stub.title, status: 'ingested', sourcePage: sourceTitle };
 }
 
-// Creates missing concept/entity pages, reuses existing ones by exact
-// case-insensitive title. Returns the final linkable titles.
 async function materialize(client, spaceId, knownTitles, items, label, descField, sourceTitle) {
   const titles = [];
   let created = 0;
@@ -220,8 +197,6 @@ async function distillWithGemini(source, existingConcepts, existingEntities) {
         { text: instructions.filter(Boolean).join('\n') },
       ],
     }],
-    // Low media resolution: dramatically faster video processing, and frame
-    // detail is irrelevant for distillation — the audio track carries it.
     generationConfig: { ...baseGenerationConfig(), mediaResolution: 'MEDIA_RESOLUTION_LOW' },
   });
 
@@ -237,8 +212,6 @@ async function distillWithGemini(source, existingConcepts, existingEntities) {
     generationConfig: baseGenerationConfig(),
   });
 
-  // Gemini rejects tool use combined with structured output, so the
-  // url_context path uses prompt-enforced JSON with thinking suppressed.
   const urlContextRequest = () => ({
     contents: [{
       parts: [{
@@ -277,8 +250,6 @@ async function distillWithGemini(source, existingConcepts, existingEntities) {
     try {
       data = await callGemini(videoRequest());
     } catch (e) {
-      // Livestream VODs and other non-standard YouTube URLs are rejected as
-      // text/html by the video-file path — read the page instead.
       if (!e.message.includes('Unsupported MIME type')) throw e;
       console.warn(`ingest: video path rejected ${source.url} — retrying via url_context`);
       data = await callGemini(urlContextRequest());
@@ -291,8 +262,6 @@ async function distillWithGemini(source, existingConcepts, existingEntities) {
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') ?? '';
   let parsed;
   try {
-    // The non-schema (url_context) path may wrap JSON in fences or preamble —
-    // parse the outermost object rather than trusting the whole response.
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
     if (start === -1 || end <= start) throw new Error('no JSON object');
@@ -360,8 +329,6 @@ function sourceBody({ distilled, source, conceptTitles, entityTitles, stubTitle 
 }
 
 function parseStub(body) {
-  // Decode until stable: stubs captured before the Slack-entity fix carry
-  // DOUBLE-escaped query strings (&amp;amp;) in their hrefs.
   let url = body.match(/<a href="([^"]+)"/)?.[1] ?? null;
   while (url && url.includes('&amp;')) url = url.replace(/&amp;/g, '&');
   const sharedBy = stripTags(body.match(/<th>Shared by<\/th><td>([\s\S]*?)<\/td>/)?.[1] ?? '');

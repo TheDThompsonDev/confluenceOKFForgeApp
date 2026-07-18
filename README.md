@@ -1,148 +1,301 @@
 # Knowledge Graph for Confluence
 
-Build an AI-native knowledge graph in Confluence with [Forge](https://developer.atlassian.com/platform/forge/).
+> **Project status:** working internal technical demo. This repository proves the end-to-end approach on a controlled Atlassian development site. It is not a production service, is not intended for live users, and should only be run with disposable demo data.
 
-Teams are drowning in information — articles, research papers, meeting notes, requirements docs. The LLM wiki pattern (popularized by Andrej Karpathy and standardized by the Open Knowledge Format) breaks sources down into cross-linked **concept**, **entity**, and **source** pages that both people and AI agents can navigate. Confluence already ships the primitives this pattern needs: page trees, labels, native page links, content properties, and permissions. This Forge app adds the rest:
+This Forge app turns linked Confluence pages into an explorable knowledge graph. It can capture a URL from Slack or Rovo, use Gemini to distill the source into structured knowledge, write cross-linked concept, entity, and source pages, visualize those relationships, and report graph-quality problems.
 
-| Module | What it does |
+The important claim is deliberately narrow: **the complete vertical slice works on Atlassian Forge and demonstrates enough of the product and engineering approach for a team to take forward.**
+
+## What the demo proves
+
+- A Forge Custom UI global page can render an interactive D3 graph from native Confluence pages and links.
+- A signed Slack event can create a deduplicated inbox page and start ingestion immediately.
+- Gemini can perform the non-deterministic distillation step while Forge code retains deterministic control over page creation, reuse, labeling, and linking.
+- Scheduled Forge functions can retry pending ingestion and maintain a human-readable graph-health report.
+- Rovo actions can search the graph, report stored health, and file a URL into the same inbox pipeline.
+- The same Confluence content remains useful without the visualization or AI layer because pages, labels, and links are all native.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Slack[Slack Events API] --> Bridge[slackEvents webtrigger]
+    Rovo[Rovo file-to-inbox action] --> Inbox[fileToInbox]
+    Bridge --> Inbox
+    Inbox --> Dedupe[Forge KVS URL deduplication]
+    Inbox --> Stub[okf-inbox Confluence page]
+    Bridge --> Ingest[Gemini ingestion]
+    Hourly[Hourly scheduled trigger] --> Ingest
+    Stub --> Ingest
+    Ingest --> Writer[Deterministic Forge writer]
+    Writer --> Pages[Source, concept, and entity pages]
+    Pages --> Links[Native Confluence page links]
+    Links --> Resolver[Forge resolver]
+    Resolver --> Graph[React and D3 graph]
+    Daily[Daily scheduled trigger] --> Health[Health report]
+    Links --> Health
+    Search[Rovo search and health actions] --> Pages
+```
+
+### Knowledge model
+
+Confluence labels classify nodes. Native page links define edges; there is no second relationship database to synchronize.
+
+| Label | Meaning | Graph color |
+|---|---|---|
+| `okf-concept` | A durable idea, method, or pattern | Purple |
+| `okf-entity` | A person, organization, product, or named work | Green |
+| `okf-source` | A distilled article, paper, note, or video | Yellow |
+| `okf-inbox` | A captured source waiting for ingestion | Blue |
+| No OKF label | A normal Confluence page | Gray |
+
+The graph reports two useful quality signals:
+
+- **Orphan:** a page with no incoming or outgoing page links. Inbox pages are excluded because they are intentionally temporary.
+- **Unresolved link:** a link whose target page does not exist in the selected space.
+
+### Capture and ingestion flow
+
+1. Slack sends a channel message event to the `slack-events` webtrigger, or Rovo invokes `file-to-inbox`.
+2. The app extracts the URL, chooses the requested space or first watched space, and uses a URL hash in Forge KVS to prevent duplicates.
+3. Forge creates an `okf-inbox` page containing the source URL, sharing context, and any deterministically captured source text.
+4. The Slack path attempts ingestion immediately. The hourly trigger retries one pending inbox page per run.
+5. Gemini 2.5 Flash returns structured JSON containing a title, summary, key points, concepts, and entities.
+6. Forge code reuses matching pages, creates missing pages, writes native links, applies labels, and marks the inbox page as ingested.
+7. The app allows three ingestion attempts; the next sweep retires a repeatedly failing item with the `okf-ingest-failed` label.
+
+Gemini does not write to Confluence. It only proposes structured content; the deterministic Forge layer owns all persistence and graph construction.
+
+### Graph and maintenance flow
+
+The Custom UI invokes Forge resolvers through `@forge/bridge`. Its Confluence operations and Rovo search use `api.asUser()`, so they execute in the current user's product context. Scheduled jobs, the Slack bridge, and the shared inbox writer use `api.asApp()` because those paths must also operate without an interactive Confluence request.
+
+The graph builder reads pages, labels, and storage-format page links, then produces nodes, edges, orphan flags, unresolved links, and summary counts. The daily maintenance function runs the same graph analysis for watched spaces, stores the latest result in KVS, and creates or updates a `Knowledge Graph Health` page.
+
+## Start reading here
+
+The shortest useful review path is:
+
+1. [`manifest.yml`](manifest.yml) for every Forge module, function, permission, resource, and runtime setting.
+2. [`src/index.js`](src/index.js) for the handler wiring.
+3. [`src/resolvers.js`](src/resolvers.js), [`src/lib/confluence.js`](src/lib/confluence.js), and [`src/lib/graph.js`](src/lib/graph.js) for the interactive graph path.
+4. [`static/graph/src/App.js`](static/graph/src/App.js) and [`static/graph/src/App.css`](static/graph/src/App.css) for the graph experience.
+5. [`src/slack-bridge.js`](src/slack-bridge.js), [`src/inbox.js`](src/inbox.js), and [`src/ingest.js`](src/ingest.js) for the complete capture-to-knowledge path.
+6. [`src/maintenance.js`](src/maintenance.js), [`src/rovo.js`](src/rovo.js), and [`src/seed.js`](src/seed.js) for health checks, Rovo actions, and the repeatable demo dataset.
+
+| Path | Responsibility |
 |---|---|
-| 🕸️ **Graph visualizer** | A Confluence global page (Custom UI + D3) that renders any space as an interactive force-directed knowledge graph — colored by OKF type, orphans highlighted, click a node to open the page |
-| ⏰ **Scheduled health checks** | A daily Forge scheduled trigger that sweeps watched spaces for orphaned pages and unresolved links, then writes a "Knowledge Graph Health" report page — deterministic verification of non-deterministic (AI-generated) work |
-| 🤖 **Rovo agent** | "Knowledge Graph Agent" answers *"what does the wiki know about X?"* in chat, backed by two Forge actions that search the graph and report its health |
-| 📥 **Inbox capture** | A `file-to-inbox` Rovo action: share a link with the Knowledge Graph Agent — in Rovo Chat, or in Slack via the official Atlassian Rovo app — and it's filed as an `okf-inbox` stub page, a raw source awaiting distillation by your ingest agent |
+| `manifest.yml` | Confluence global page, scheduled triggers, Rovo agent/actions, webtriggers, scopes, egress, and Node.js runtime |
+| `src/index.js` | Exports the handlers named by the manifest |
+| `src/resolvers.js` | Custom UI boundary for spaces, graph data, watch state, health checks, and demo seeding |
+| `src/lib/confluence.js` | Confluence REST helpers for spaces, pages, labels, search, create, and update |
+| `src/lib/graph.js` | Converts pages and native links into graph data and quality signals |
+| `src/slack-bridge.js` | Slack signature verification, event filtering, metadata capture, and immediate ingest attempt |
+| `src/inbox.js` | URL validation, KVS deduplication, and inbox-page creation |
+| `src/ingest.js` | Gemini request, structured-output validation, page reuse/creation, links, labels, and retries |
+| `src/maintenance.js` | Watched-space state, scheduled graph analysis, KVS health snapshots, and report-page writing |
+| `src/rovo.js` | Rovo search and health action handlers |
+| `src/seed.js` | Idempotent demo content, including intentional graph defects for the health-check story |
+| `static/graph` | React 16 Custom UI and D3 force-directed visualization |
 
-## How pages become a graph
+### Why Custom UI is used
 
-Pages are classified by Confluence labels:
+The graph needs direct SVG rendering, D3's force simulation, drag, zoom, selection, and responsive canvas behavior. Custom UI is therefore a deliberate prototype choice for this module, not an accidental mixing of UI Kit components. The Forge resolver remains the product API boundary.
 
-- `okf-concept` — ideas and topics (purple nodes)
-- `okf-entity` — people, places, organizations (green nodes)
-- `okf-source` — ingested articles, papers, notes (yellow nodes)
-- `okf-inbox` — raw sources captured via the agent, awaiting distillation (blue nodes; never flagged as orphans)
-- anything else renders as a plain page (gray nodes)
+## Reviewer setup
 
-Edges come from the page links Confluence already stores in each page body — no extra bookkeeping. Ingest content with any AI tooling you like (for example, Claude Code via the [Atlassian Remote MCP server](https://www.atlassian.com/platform/remote-mcp-server)) and the graph stays current.
+### Prerequisites
 
-## Requirements
+- Node.js and npm
+- [Atlassian Forge CLI](https://developer.atlassian.com/platform/forge/set-up-forge/), authenticated with `forge login`
+- An Atlassian cloud development site with Confluence
+- Rovo access only if reviewing the Rovo agent
+- A Slack app only if reviewing Slack capture
+- A Gemini API key only if reviewing automated distillation
 
-- [Forge CLI](https://developer.atlassian.com/platform/forge/set-up-forge/) 13+ (`npm install -g @forge/cli`), logged in via `forge login`
-- Node.js 22+
-- An Atlassian cloud developer site — get one free at [go.atlassian.com/cloud-dev](https://go.atlassian.com/cloud-dev)
+Install dependencies and build the Custom UI from the repository root:
 
-## Quick start
-
-```bash
-# backend deps (repo root)
-npm install
-
-# frontend deps + build
-cd static/graph
-npm install
-npm run build
-cd ../..
-
-# ship it
-forge deploy
-forge install   # choose Confluence and your site
+```sh
+npm ci
+npm --prefix static/graph ci
+npm --prefix static/graph run build
+forge lint
 ```
 
-Then in Confluence: **Apps → Knowledge Graph**, pick a space, and watch it render. Click **Watch this space** to enable the daily health checks, or **Run health check now** to generate a report immediately. Find the Rovo agent in Rovo Chat as **Knowledge Graph Agent**.
+### Choose the Forge registration path
 
-## Capturing links from Slack
+**Company reviewers using the existing app:** keep the `app.id` already present in `manifest.yml`. They must be granted access to that Forge app. They should not run `forge register`, because doing so replaces the manifest ID with a separate app registration.
 
-Two ways to turn your team's reading channel into a knowledge-graph inbox. Both end at the same place: a `📥` stub page labeled `okf-inbox` — a blue node in the graph, listed in the health report under "Awaiting ingestion." Duplicate URLs are skipped automatically, and neither path does AI extraction — distillation belongs to your ingest agent (see the wiki-constitution instructions embedded in every stub page).
+**Reviewers creating an independent copy:** run the following once. It creates a new Forge app registration and updates the local manifest ID. The new app has separate environments, variables, installations, storage, and webtrigger URLs.
 
-### Option A — the built-in Slack bridge (custom Slack app → webtrigger)
-
-The app ships a webtrigger that speaks Slack's Events API directly: every channel message containing a link is filed to the inbox, with the rest of the message preserved as the "why this matters" comment. No Rovo required. The bridge enriches each stub with *metadata only* — the sharer's display name and channel name (Slack API) and the link's title (YouTube oEmbed, or the page's `<title>`) — while content distillation stays with the ingest agent.
-
-1. Deploy and get your webtrigger URL:
-
-   ```sh
-   forge deploy
-   forge install --upgrade    # adding a module bumps the major version — installs stay pinned until you upgrade
-   forge webtrigger           # choose slack-events, copy the URL
-   ```
-
-2. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps) → **Create New App → From a manifest**, pasting (fill in your webtrigger URL):
-
-   ```yaml
-   display_information:
-     name: Knowledge Graph Bridge
-     description: Files shared links into the Confluence knowledge-graph inbox
-   features:
-     bot_user:
-       display_name: kg-bridge
-       always_online: true
-   oauth_config:
-     scopes:
-       bot:
-         - channels:history   # required to pair with the message.channels event
-         - users:read         # resolve "shared by" display names
-         - channels:read      # resolve channel names
-   settings:
-     event_subscriptions:
-       request_url: <your webtrigger URL>
-       bot_events:
-         - message.channels
-   ```
-
-3. **Install to Workspace**, then collect two credentials from the app pages — the **Signing Secret** (Basic Information) and the **Bot User OAuth Token** (`xoxb-…`, OAuth & Permissions) — and store both in Forge, then redeploy so the running function picks them up:
-
-   ```sh
-   forge variables set --encrypt SLACK_SIGNING_SECRET <value>
-   forge variables set --encrypt SLACK_BOT_TOKEN <value>
-   forge deploy
-   ```
-
-4. `/invite @kg-bridge` in your reading channel. Post a link with a sentence about why it matters — the stub page appears in Confluence within seconds, titled after the shared page or video.
-
-Optionally, set a `YOUTUBE_API_KEY` (official YouTube Data API v3, free) the same way — video stubs then capture the channel, duration, tags, and full description instead of just the title, giving automated distillation something real to work with. Transcripts are deliberately not fetched (the official API is owner-only; scraping is fragile and ToS-gray) — full video distillation belongs to the ingest agent.
-
-Slack retries deliveries that don't get a fast 200; the KVS dedup makes those retries harmless. Requests are verified against the signing secret (HMAC, 5-minute replay window). If `SLACK_BOT_TOKEN` is unset or a lookup fails, stubs degrade gracefully to raw Slack IDs and domain-based titles — capture never depends on enrichment.
-
-### Option B — the official Rovo app for Slack (no code)
-
-If your org has the [Atlassian Rovo app for Slack](https://slack.com/marketplace/A08B0EYMUPR-atlassian-rovo) connected (org admin, one-time), add the **Knowledge Graph Agent** to your channel and configure its trigger — an emoji like 📚, an @mention, or every message. When triggered, the agent calls the same `file-to-inbox` action and confirms in the thread. This route also resolves sharer names and lets the agent respond conversationally, which the raw bridge doesn't.
-
-The action works anywhere the agent runs: in Rovo Chat in Confluence, just say *"file this to the knowledge graph: <url> — great breakdown of event sourcing."*
-
-> **Design note:** an earlier iteration used a Forge webtrigger fed by Slack **Workflow Builder** — abandoned because Workflow Builder has no native outgoing-webhook step. The current bridge instead pairs the webtrigger with a proper Slack app using the Events API, which posts natively to any URL. Heads-up: the webtrigger module and the `external.fetch` egress permission each end **Runs on Atlassian** eligibility (verify with `forge eligibility`); if RoA matters to you, delete the `webtrigger` module, `src/slack-bridge.js`, and the `permissions.external` block, and use Option B.
-
-## Automated ingestion (optional, bring your own model)
-
-With a `GEMINI_API_KEY` set (`forge variables set --encrypt GEMINI_API_KEY <key>`, free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)), the app distills inbox stubs automatically: an hourly scheduled trigger (or the `ingest-now` webtrigger, for demos) sweeps `okf-inbox` pages and, for each one, produces an `okf-source` summary page plus created-or-reused `okf-concept` / `okf-entity` pages, cross-linked per the wiki constitution — then retires the stub.
-
-The division of labor embodies the app's core principle — **non-deterministic work executed by AI, verified and written by deterministic code**: Gemini only produces structured JSON (summary, key points, concepts, entities); Forge code does all page creation, deduplication against existing graph pages, linking, and labeling. Gemini is the default because it's the only major model API that ingests a **YouTube URL natively** (it watches the video — no transcript scraping); articles use the text captured at share time, and anything else falls back to Gemini's `url_context` tool. Stubs that fail three times are labeled `okf-ingest-failed` and skipped. No key set → the sweep is a no-op and stubs wait for a human-driven ingest agent (Rovo, or any MCP-connected assistant).
-
-One invocation ingests one stub (video distillation needs most of Forge's 55-second function budget); a backlog drains across hourly runs, or hit the `ingest-now` webtrigger repeatedly (`forge webtrigger` for the URL).
-
-## Project structure
-
-```
-manifest.yml              # modules: global page, scheduled trigger, Rovo agent + actions
-src/
-  index.js                # function handler exports
-  resolvers.js            # Custom UI resolver (spaces, graph data, watch/health)
-  maintenance.js          # scheduled trigger + health report writer
-  rovo.js                 # Rovo agent action handlers
-  inbox.js                # file-to-inbox action: link → okf-inbox stub page
-  slack-bridge.js         # webtrigger: Slack Events API → fileToInbox
-  ingest.js               # scheduled/on-demand: okf-inbox stubs → Gemini → source/concept/entity pages
-  lib/
-    confluence.js         # Confluence REST helpers (v1 CQL search + v2 pages/spaces)
-    graph.js              # graph builder: pages → nodes, page links → edges
-static/graph/             # Custom UI frontend (React + D3 force graph)
+```sh
+forge register knowledge-graph-review
 ```
 
-## Development
+The Forge app ID in `manifest.yml` identifies the app; it is not a credential.
 
-- `forge deploy` after backend/manifest changes; rebuild `static/graph` first when the frontend changes
-- `forge tunnel` for live backend iteration
-- `forge lint` validates the manifest and required scopes
-- `forge logs` shows scheduled-trigger runs
-- ⚠️ Adding or removing modules/scopes bumps the app's **major version**, and installed sites stay pinned to the old major version until you run `forge install --upgrade`. If your deployed changes mysteriously don't show up, check `forge install list` — an "Update available" (or an older major version) means you need the upgrade.
+### Runtime variables and API keys
 
-## Support
+**Cloning this repository does not provide any Gemini, Slack, or YouTube credential.** Secret values are not committed to Git. They live in environment-specific Forge encrypted variables and are not copied when someone registers a separate app.
 
-See [Get help](https://developer.atlassian.com/platform/forge/get-help/) for how to get help and provide feedback.
+| Variable | Needed for | Required? |
+|---|---|---|
+| `GEMINI_API_KEY` | Automated source distillation | Only for the AI ingest path |
+| `SLACK_SIGNING_SECRET` | Authenticating Slack Events API requests | Only for Slack capture |
+| `SLACK_BOT_TOKEN` | Resolving Slack user and channel names | Optional enrichment |
+| `YOUTUBE_API_KEY` | Richer YouTube metadata during capture | Optional enrichment |
+
+Set only the variables needed for the path under review:
+
+```sh
+forge variables set --encrypt -e development GEMINI_API_KEY YOUR_GEMINI_KEY
+forge variables set --encrypt -e development SLACK_SIGNING_SECRET YOUR_SLACK_SIGNING_SECRET
+forge variables set --encrypt -e development SLACK_BOT_TOKEN YOUR_SLACK_BOT_TOKEN
+forge variables set --encrypt -e development YOUTUBE_API_KEY YOUR_YOUTUBE_KEY
+```
+
+Redeploy after changing Forge variables. Encrypted values cannot be recovered with `forge variables list`; replace them by setting them again.
+
+Without `GEMINI_API_KEY`, Slack and Rovo can still create inbox pages, and the graph, seed data, search, and health-check paths still work. Automated ingestion safely reports that it was skipped.
+
+### Deploy and install on a disposable development site
+
+```sh
+forge deploy --non-interactive -e development
+forge install --non-interactive --site YOUR_SITE.atlassian.net --product Confluence --environment development
+```
+
+If this app is already installed and modules or scopes changed, upgrade the installation after deploying:
+
+```sh
+forge install --non-interactive --upgrade --site YOUR_SITE.atlassian.net --product Confluence --environment development
+```
+
+Code-only changes need a deploy but do not need an installation upgrade. Frontend changes must be built before deployment because `manifest.yml` serves `static/graph/build`.
+
+## Slack capture setup
+
+The demo uses a small custom Slack app and the Slack Events API.
+
+Create the signed Slack endpoint after deploying and installing:
+
+```sh
+forge webtrigger create -f slack-events -s YOUR_SITE.atlassian.net -p Confluence -e development
+```
+
+Create a Slack app from this manifest and replace `YOUR_SLACK_WEBTRIGGER_URL` with the generated URL:
+
+```yaml
+display_information:
+  name: Knowledge Graph Bridge
+  description: Files shared links into the Confluence knowledge graph inbox
+features:
+  bot_user:
+    display_name: kg-bridge
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - channels:history
+      - users:read
+      - channels:read
+settings:
+  event_subscriptions:
+    request_url: YOUR_SLACK_WEBTRIGGER_URL
+    bot_events:
+      - message.channels
+```
+
+Then:
+
+1. Install the Slack app to the controlled demo workspace.
+2. Store its signing secret and optional bot token as encrypted Forge variables.
+3. Redeploy the Forge app.
+4. Invite `@kg-bridge` to the controlled public channel.
+5. Post a new URL with a short sentence explaining why it matters.
+
+Slack event callbacks are verified with HMAC-SHA256 and rejected if the signature is invalid or the timestamp is more than five minutes old. Slack's initial `url_verification` challenge is returned before that check so the endpoint can be configured. Bot messages, message subtypes, and events without a user are ignored.
+
+The webtrigger URL is a capability URL and should be treated as sensitive configuration even though the Slack handler also verifies Slack's signature.
+
+## Optional on-demand ingest endpoint
+
+The hourly job is the normal retry path. For a live demo, `ingest-now` can trigger the same sweep without waiting for the next scheduled invocation:
+
+```sh
+forge webtrigger create -f ingest-now -s YOUR_SITE.atlassian.net -p Confluence -e development
+```
+
+This endpoint is intentionally demo-only and has no application-level authentication. Keep its generated URL private, use it only on the disposable development site, and do not carry this pattern into a production design.
+
+## Demo walkthrough
+
+Use a new or disposable Confluence space.
+
+1. Open **Apps -> Knowledge Graph**.
+2. Select the demo space.
+3. Choose **Seed demo data**. The seed operation reuses pages that already exist, so it is safe to repeat.
+4. Explore the graph with search, type filters, orphan filtering, drag, zoom, node selection, and double-click navigation.
+5. Choose **Watch this space** so scheduled ingestion and maintenance know which space to process.
+6. Choose **Run health check**. The seeded data intentionally contains an orphan and an unresolved link so the report has something meaningful to find.
+7. If Slack and Gemini are configured, share a previously unused URL in the demo channel. The bridge creates the inbox page and immediately attempts distillation.
+8. Refresh the graph to show the new source, concept, and entity pages and their native Confluence links.
+9. In Rovo, ask the **Knowledge Graph Agent** to find a seeded topic or report graph health.
+
+Use a fresh URL when repeating the capture story. URL deduplication is intentional and persists in Forge KVS even if the related page is manually deleted.
+
+## Validation and troubleshooting
+
+Run the same lightweight checks used before handing off this demo:
+
+```sh
+forge lint
+node --check src/index.js
+node --check src/resolvers.js
+node --check src/inbox.js
+node --check src/ingest.js
+node --check src/slack-bridge.js
+npm --prefix static/graph run build
+```
+
+| Symptom | What to check |
+|---|---|
+| `GEMINI_API_KEY not set` | Set the encrypted variable in the same Forge environment and redeploy |
+| Slack returns `401` | Confirm the signing secret, environment, request URL, and Slack app configuration |
+| A shared URL is skipped | Use a new URL; the KVS deduplication record is doing its job |
+| Inbox page exists but is not distilled | Confirm the Gemini key, inspect logs, then use the hourly job or private `ingest-now` URL |
+| Frontend changes do not appear | Rebuild `static/graph`, then redeploy |
+| Manifest/module changes do not appear | Deploy, then run `forge install --upgrade` for the installed site |
+| Newly created content is briefly absent from search | Allow for Confluence indexing; direct page reads and the hourly retry path avoid relying only on immediate CQL visibility |
+
+Recent development logs:
+
+```sh
+forge logs -n 100 -e development --since 15m
+```
+
+## Intentional demo boundary
+
+This repository is a competent proof of capability, not a claim of production readiness. Its accepted demo constraints are:
+
+- one controlled Atlassian development site, one controlled Slack workspace/channel, and disposable content;
+- no live users, sensitive sources, production credentials, or production service-level expectations;
+- broad backend egress so the bridge can read arbitrary shared URLs and call Slack, Google, YouTube, and Gemini;
+- a capability URL for on-demand ingestion;
+- synchronous Slack capture and immediate ingestion, optimized for a clear vertical-slice demo;
+- bounded page loading and one scheduled inbox item per ingest invocation, which are sufficient for the demo dataset.
+
+Those choices keep the proof simple and observable. A production engineering handoff would revisit authenticated job triggering, authorization and tenancy boundaries, an asynchronous capture queue, scoped egress and data-governance requirements, pagination and load testing, dependency modernization, accessibility, automated tests/CI, telemetry, retries, and operational runbooks.
+
+## Additional context
+
+- [`docs/why-this-matters.md`](docs/why-this-matters.md) explains the product rationale.
+- [`docs/project-brief.md`](docs/project-brief.md) records the original project framing; where early assumptions differ from the implementation, this README, `manifest.yml`, and the current source are authoritative.
+- [`docs/lessons-learned.md`](docs/lessons-learned.md) captures implementation notes and tradeoffs from the demo build.
+
+Official Forge references:
+
+- [Forge environments and encrypted variables](https://developer.atlassian.com/platform/forge/environments-and-versions/)
+- [Registering a copied Forge app](https://developer.atlassian.com/platform/forge/cli-reference/register/)
+- [Creating a webtrigger URL](https://developer.atlassian.com/platform/forge/cli-reference/webtrigger-create/)
+- [Forge webtrigger security model](https://developer.atlassian.com/platform/forge/runtime-reference/web-trigger/)

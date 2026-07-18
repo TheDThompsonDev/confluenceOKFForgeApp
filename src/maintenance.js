@@ -21,8 +21,6 @@ export async function getStoredHealth(spaceKey) {
   return kvs.get(healthKey(spaceKey));
 }
 
-// Scheduled trigger entry point: sweep every watched space with app
-// permissions, since no user is present at 3am.
 export async function runScheduledMaintenance() {
   const spaceKeys = await getWatchedSpaces();
   const results = [];

@@ -1,9 +1,5 @@
 import { getSpaceId, findPageByTitle, createPage, addLabel } from './lib/confluence';
 
-// Demo knowledge graph based on ingesting two sources: the MIT "cognitive
-// debt" study and a blog post on frontier-model adoption. Includes one
-// deliberate orphan page and one deliberately unresolved link so the
-// health check has findings to report.
 const link = (title) => `<ac:link><ri:page ri:content-title="${title}" /></ac:link>`;
 
 const SEED_PAGES = [

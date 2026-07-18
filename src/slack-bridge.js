@@ -3,11 +3,6 @@ import { fetch } from '@forge/api';
 import { fileToInbox } from './inbox';
 import { ingestNewStub } from './ingest';
 
-// Webtrigger: a direct Slack Events API bridge — no Rovo Slack app required.
-// A custom Slack app posts channel messages here; any message containing a
-// link is filed through the same fileToInbox path the Rovo action uses.
-// Trade-off (deliberate): a webtrigger module ends Runs on Atlassian
-// eligibility. Still zero egress — this endpoint only receives.
 const SLACK_LINK = /<(https?:\/\/[^>|]+)(?:\|[^>]*)?>/g;
 const MAX_SKEW_SECONDS = 60 * 5;
 
@@ -22,9 +17,6 @@ export async function slackEvents(request) {
     return respond(400, { error: 'invalid JSON' });
   }
 
-  // Slack sends url_verification when the Request URL is first configured.
-  // Answered even before the signing secret is set, so the endpoint can be
-  // verified during Slack app creation; real events always require the secret.
   if (payload.type === 'url_verification') {
     return respond(200, { challenge: payload.challenge });
   }
@@ -40,9 +32,6 @@ export async function slackEvents(request) {
   }
 
   if (payload.type === 'event_callback') {
-    // Errors are logged but still answered with 200: repeated non-2xx
-    // responses make Slack disable the event subscription entirely, and
-    // KVS dedup already makes retried deliveries idempotent.
     try {
       await handleEvent(payload.event);
     } catch (e) {
@@ -54,20 +43,15 @@ export async function slackEvents(request) {
 
 async function handleEvent(event) {
   if (event?.type !== 'message' || event.subtype || event.bot_id || !event.user) {
-    return; // edits, joins, bot echoes (incl. our own confirmations if ever added)
+    return;
   }
-  // Slack HTML-escapes message text (& becomes &amp;) — decode before URL
-  // extraction or query strings arrive corrupted downstream.
   const text = decodeEntities(event.text ?? '');
   const urls = [...new Set([...text.matchAll(SLACK_LINK)].map((m) => m[1]))];
   if (urls.length === 0) {
-    return; // only link-bearing messages become inbox stubs
+    return;
   }
   const comment = text.replace(SLACK_LINK, '').replace(/\s+/g, ' ').trim();
 
-  // Metadata enrichment only — sharer name, channel name, link title. Content
-  // distillation still belongs to the ingest agent. Every lookup degrades
-  // gracefully to the raw ID / domain if the call fails or the token is unset.
   const [sharedBy, channel] = await Promise.all([
     resolveUserName(event.user),
     resolveChannelName(event.channel),
@@ -85,10 +69,6 @@ async function handleEvent(event) {
     });
     console.log(`slackEvents: ${result.status} — ${url}${result.message ? ` (${result.message})` : ''}`);
 
-    // Distill immediately — the fresh page isn't visible to CQL-based sweeps
-    // for a few minutes (search index lag), but we already hold its id and
-    // body. If this times out or fails, the stub keeps its okf-inbox label
-    // and the hourly sweep retries it.
     if (result.status === 'filed') {
       try {
         const ingested = await ingestNewStub(result.spaceKey, {
@@ -134,10 +114,6 @@ async function resolveChannelName(channelId) {
   return data?.channel?.name || null;
 }
 
-// Fetches title + readable text so downstream distillation (Confluence
-// Automation + Rovo, or the MCP ingest agent) never needs external access.
-// Deterministic extraction only — tag stripping, no AI. YouTube pages are
-// script shells, so oEmbed supplies title/author and text stays empty.
 const MAX_CAPTURED_CHARS = 20_000;
 
 async function fetchLinkMeta(url) {
@@ -162,11 +138,6 @@ async function fetchLinkMeta(url) {
   }
 }
 
-// With a YOUTUBE_API_KEY (official Data API v3), videos capture channel,
-// duration, and full description — enough for automated distillation to say
-// what the resource is. Without it, falls back to oEmbed (title/author only).
-// Transcripts are deliberately not fetched: the official API is owner-only,
-// and scraping the watch page's internals is fragile and ToS-gray.
 async function fetchYouTubeMeta(url, parsed) {
   const fallback = async () => {
     const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
@@ -216,7 +187,7 @@ function extractReadableText(html) {
     .replace(/[ \t]+/g, ' ')
     .replace(/\s*\n\s*/g, '\n')
     .trim();
-  if (text.length < 200) return null; // script-shell page; nothing useful captured
+  if (text.length < 200) return null;
   return text.length > MAX_CAPTURED_CHARS ? `${text.slice(0, MAX_CAPTURED_CHARS)}…` : text;
 }
 

@@ -2,7 +2,6 @@ import api, { route } from '@forge/api';
 import { getWatchedSpaces, getStoredHealth } from './maintenance';
 import { OKF_LABEL_TYPES } from './lib/confluence';
 
-// Rovo action: search the knowledge graph for pages matching a query.
 export async function findKnowledgeEntries(payload) {
   const query = (payload?.query ?? payload?.inputs?.query ?? '').trim();
   if (!query) {
@@ -44,7 +43,6 @@ export async function findKnowledgeEntries(payload) {
   };
 }
 
-// Rovo action: report the latest stored health check(s).
 export async function getGraphHealth(payload) {
   const spaceKey = (payload?.spaceKey ?? payload?.inputs?.spaceKey ?? '').trim();
 

@@ -2,10 +2,6 @@ import { getSpacePages, parseLinkedTitles } from './confluence';
 
 const HEALTH_PAGE_TITLE = 'Knowledge Graph Health';
 
-// Builds the knowledge graph for a space: nodes are pages, edges are the
-// page links Confluence stores natively in each page body. The generated
-// health report page is excluded — it links to the orphans it finds, which
-// would otherwise un-orphan them on the next sweep.
 export async function buildGraph(client, spaceKey) {
   const pages = (await getSpacePages(client, spaceKey)).filter(
     (p) => p.title !== HEALTH_PAGE_TITLE
@@ -36,8 +32,6 @@ export async function buildGraph(client, spaceKey) {
     }
   }
 
-  // Inbox stubs are unprocessed by definition — being unlinked is their
-  // normal state, not a defect, so they're never flagged as orphans.
   const nodes = pages.map((page) => ({
     id: page.id,
     title: page.title,
